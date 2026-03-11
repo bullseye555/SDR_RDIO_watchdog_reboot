@@ -10,6 +10,10 @@ $sdrStateFile = "C:\PotatoNet\state\sdr_state.json"
 $counterFile = "C:\PotatoNet\state\restart_counters.json"
 $sqlite = "C:\Users\nabro\Desktop\rdio\sqlite3.exe"
 $db = "C:\Users\nabro\Desktop\rdio\rdio-scanner.db"
+$sdrLaunchTarget = "C:\Users\nabro\Desktop\sdr-trunk.bat - Shortcut.lnk"
+$rdioLaunchTarget = "C:\Users\nabro\Desktop\rdio.bat"
+$recordingStaleMinutes = 30
+$restartThrottleHours = 1
 
 function Get-MelbourneTimeZone {
     return [System.TimeZoneInfo]::FindSystemTimeZoneById('AUS Eastern Standard Time')
@@ -58,6 +62,65 @@ function Convert-RdioUtcToMelbourneString {
     return Convert-ToMelbourneString -DateTimeValue $utc
 }
 
+function Initialize-StateFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$DefaultState,
+        [Parameter(Mandatory = $true)]
+        [string]$Description,
+        [Parameter(Mandatory = $true)]
+        [int]$EventId
+    )
+
+    if (Test-Path -LiteralPath $Path) {
+        return
+    }
+
+    $DefaultState | ConvertTo-Json | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-PotatoLog -LogFile $LogFile -Message "Created missing $Description at $Path" -EventId $EventId
+}
+
+function Restart-SdrTrunk {
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$SdrState,
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$Counters,
+        [Parameter(Mandatory = $true)]
+        [string]$Reason,
+        [Parameter(Mandatory = $true)]
+        [string]$DiscordTitle,
+        [Parameter(Mandatory = $true)]
+        [string[]]$DescriptionLines,
+        [Parameter(Mandatory = $true)]
+        [int]$Color,
+        [switch]$StopExisting
+    )
+
+    Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "SDRTrunk restart requested: $Reason" -EventId 2202
+
+    if ($StopExisting -and $SdrState.pid) {
+        Stop-Process -Id $SdrState.pid -Force -ErrorAction SilentlyContinue
+    }
+
+    $p = Start-Process $sdrLaunchTarget -PassThru
+    $SdrState.pid = $p.Id
+    $SdrState.last_restart = $now
+    $SdrState | ConvertTo-Json | Set-Content -LiteralPath $sdrStateFile -Encoding UTF8
+
+    $Counters.sdr_restarts++
+    $Counters | ConvertTo-Json | Set-Content -LiteralPath $counterFile -Encoding UTF8
+
+    $desc = @(
+        $DescriptionLines
+        "New PID: $($p.Id)"
+    ) -join "`n"
+
+    Send-DiscordEmbed -Url $WebhookUrl -Title $DiscordTitle -Description $desc -Color $Color
+}
+
 trap {
     Invoke-PotatoUnhandledError -ErrorRecord $_
     break
@@ -68,22 +131,8 @@ Start-PotatoScript -ScriptName 'watchdog.ps1' -LogFile $LogFile -WebhookUrl $Web
 try {
     $nowLocal = Convert-ToMelbourneString -DateTimeValue $now
 
-    if (!(Test-Path -LiteralPath $sdrStateFile)) {
-        @{
-            pid = ''
-            last_restart = ''
-        } | ConvertTo-Json | Set-Content -LiteralPath $sdrStateFile -Encoding UTF8
-        Write-PotatoLog -LogFile $LogFile -Message "Created missing SDR state file at $sdrStateFile" -EventId 1100
-    }
-
-    if (!(Test-Path -LiteralPath $counterFile)) {
-        @{
-            rdio_errors = 0
-            sdr_restarts = 0
-            last_report = ''
-        } | ConvertTo-Json | Set-Content -LiteralPath $counterFile -Encoding UTF8
-        Write-PotatoLog -LogFile $LogFile -Message "Created missing counter file at $counterFile" -EventId 1101
-    }
+    Initialize-StateFile -Path $sdrStateFile -DefaultState @{ pid = ''; last_restart = '' } -Description 'SDR state file' -EventId 1100
+    Initialize-StateFile -Path $counterFile -DefaultState @{ rdio_errors = 0; sdr_restarts = 0; last_report = '' } -Description 'counter file' -EventId 1101
 
     $sdr = Get-Content -LiteralPath $sdrStateFile | ConvertFrom-Json
     $counters = Get-Content -LiteralPath $counterFile | ConvertFrom-Json
@@ -100,23 +149,11 @@ try {
     }
 
     if (-not $procRunning) {
-        Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message 'SDRTrunk process not running - restarting' -EventId 2201
-
-        $p = Start-Process "C:\Users\nabro\Desktop\sdr-trunk.bat - Shortcut.lnk" -PassThru
-        $sdr.pid = $p.Id
-        $sdr.last_restart = $now
-        $sdr | ConvertTo-Json | Set-Content -LiteralPath $sdrStateFile -Encoding UTF8
-
-        $counters.sdr_restarts++
-        $counters | ConvertTo-Json | Set-Content -LiteralPath $counterFile -Encoding UTF8
-
-        $desc = @(
-            "Process was not running"
+        Restart-SdrTrunk -SdrState $sdr -Counters $counters -Reason 'Process was not running' -DiscordTitle 'SDRTrunk Restarted (Process Missing)' -DescriptionLines @(
+            'Process was not running'
             "Restart time: $nowLocal"
-            "New PID: $($p.Id)"
-        ) -join "`n"
+        ) -Color 15158332
 
-        Send-DiscordEmbed -Url $WebhookUrl -Title 'SDRTrunk Restarted (Process Missing)' -Description $desc -Color 15158332
         Stop-PotatoScript -Status 'completed' -Level 'INFO'
         return
     }
@@ -124,53 +161,41 @@ try {
     # --------------------------------------------------
     # SDRTrunk recordings freshness check
     # --------------------------------------------------
-    $latest = Get-ChildItem -LiteralPath $recordings -File -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-
-    if ($latest) {
-        $lastRecording = $latest.LastWriteTime
-        $lastRecordingLocal = Convert-ToMelbourneString -DateTimeValue $lastRecording
-
-        if ($lastRecording -lt $now.AddMinutes(-30)) {
-            $restartAllowed = $true
-
-            if ($sdr.last_restart) {
-                $lastRestart = [datetime]$sdr.last_restart
-                if ($lastRestart -gt $now.AddHours(-1)) {
-                    $restartAllowed = $false
-                    Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "SDRTrunk appears hung but restart was skipped due to one-per-hour throttle. Last restart: $lastRestart" -EventId 2204
-                }
-            }
-
-            if ($restartAllowed) {
-                Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message 'SDRTrunk appears hung - restarting' -EventId 2202
-
-                if ($sdr.pid) {
-                    Stop-Process -Id $sdr.pid -Force -ErrorAction SilentlyContinue
-                }
-
-                $p = Start-Process "C:\Users\nabro\Desktop\sdr-trunk.bat - Shortcut.lnk" -PassThru
-                $sdr.pid = $p.Id
-                $sdr.last_restart = $now
-                $sdr | ConvertTo-Json | Set-Content -LiteralPath $sdrStateFile -Encoding UTF8
-
-                $counters.sdr_restarts++
-                $counters | ConvertTo-Json | Set-Content -LiteralPath $counterFile -Encoding UTF8
-
-                $desc = @(
-                    "Check time: $nowLocal"
-                    "Last recording: $lastRecordingLocal"
-                    "Restart performed: $nowLocal"
-                    "New PID: $($p.Id)"
-                ) -join "`n"
-
-                Send-DiscordEmbed -Url $WebhookUrl -Title 'SDRTrunk Restarted (No Recordings)' -Description $desc -Color 15105570
-            }
-        }
+    if (-not (Test-Path -LiteralPath $recordings)) {
+        Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "Recordings folder missing: $recordings" -EventId 2206
     }
     else {
-        Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "No recordings found in $recordings" -EventId 2205
+        $latest = Get-ChildItem -LiteralPath $recordings -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+        if ($latest) {
+            $lastRecording = $latest.LastWriteTime
+            $lastRecordingLocal = Convert-ToMelbourneString -DateTimeValue $lastRecording
+
+            if ($lastRecording -lt $now.AddMinutes(-$recordingStaleMinutes)) {
+                $restartAllowed = $true
+
+                if ($sdr.last_restart) {
+                    $lastRestart = [datetime]$sdr.last_restart
+                    if ($lastRestart -gt $now.AddHours(-$restartThrottleHours)) {
+                        $restartAllowed = $false
+                        Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "SDRTrunk appears hung but restart was skipped due to one-per-$restartThrottleHours-hour throttle. Last restart: $lastRestart" -EventId 2204
+                    }
+                }
+
+                if ($restartAllowed) {
+                    Restart-SdrTrunk -SdrState $sdr -Counters $counters -Reason 'No recent recordings' -DiscordTitle 'SDRTrunk Restarted (No Recordings)' -DescriptionLines @(
+                        "Check time: $nowLocal"
+                        "Last recording: $lastRecordingLocal"
+                        "Restart performed: $nowLocal"
+                    ) -Color 15105570 -StopExisting
+                }
+            }
+        }
+        else {
+            Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "No recordings found in $recordings" -EventId 2205
+        }
     }
 
     # --------------------------------------------------
@@ -179,7 +204,7 @@ try {
     $rdioRunning = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "*rdio*" }
     if (-not $rdioRunning) {
         Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message 'RDIO process missing - restarting' -EventId 2203
-        Start-Process "C:\Users\nabro\Desktop\rdio.bat"
+        Start-Process $rdioLaunchTarget
 
         $desc = @(
             "Process was not running"
@@ -195,7 +220,7 @@ try {
     if ((Test-Path -LiteralPath $sqlite) -and (Test-Path -LiteralPath $db)) {
         $sqlFile = Join-Path $env:TEMP "potatonet_rdio_query.sql"
 
-        @'
+@'
 SELECT
     COUNT(*),
     MIN(replace(dateTime, ' +0000 UTC', '')),
@@ -210,7 +235,7 @@ FROM (
 '@ | Set-Content -LiteralPath $sqlFile -Encoding UTF8
 
         try {
-            $res = & $sqlite $db ".read $sqlFile" 2>&1
+            $res = ((& $sqlite $db ".read $sqlFile" 2>&1) | Out-String).Trim()
             Write-PotatoLog -LogFile $LogFile -Message "RDIO sqlite query result: $res" -EventId 1300
 
             if ($res) {
