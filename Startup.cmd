@@ -1,0 +1,1 @@
+powerShell -ExecutionPolicy Bypass -File C:\PotatoNet\scripts\startup.ps1
