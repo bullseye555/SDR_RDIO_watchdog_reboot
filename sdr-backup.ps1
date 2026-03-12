@@ -38,7 +38,7 @@ trap {
 # =========================
 # Main
 # =========================
-Start-PotatoScript -ScriptName 'sdr-backup.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl
+Start-PotatoScript -ScriptName 'sdr-backup.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl -StartEventId 1040
 
 try {
     $files = @(Get-ChildItem -Path $TargetPaths -File -Recurse -ErrorAction Stop)

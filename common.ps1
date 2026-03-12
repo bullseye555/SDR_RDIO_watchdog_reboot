@@ -331,17 +331,20 @@ function Start-PotatoScript {
         [string]$ScriptName,
         [Parameter(Mandatory = $true)]
         [string]$LogFile,
-        [string]$WebhookUrl
+        [string]$WebhookUrl,
+        [int]$StartEventId = 1000
     )
 
     $script:__PotatoStartTime = Get-Date
     $script:__PotatoScriptName = $ScriptName
     $script:__PotatoLogFile = $LogFile
     $script:__PotatoWebhookUrl = Resolve-PotatoWebhookUrl -Url $WebhookUrl
+    $script:__PotatoStartEventId = $StartEventId
+    $script:__PotatoEndEventId = $StartEventId + 1
 
     Enter-PotatoScriptLock -ScriptName $ScriptName -LogFile $LogFile -WebhookUrl $script:__PotatoWebhookUrl
 
-    Write-PotatoLog -Message "$ScriptName started on $env:COMPUTERNAME" -Level INFO -LogFile $LogFile -EventId 1000
+    Write-PotatoLog -Message "$ScriptName started on $env:COMPUTERNAME" -Level INFO -LogFile $LogFile -EventId $script:__PotatoStartEventId
 
     $psVersion = $PSVersionTable.PSVersion.ToString()
     $edition = if ($PSVersionTable.PSEdition) { $PSVersionTable.PSEdition } else { 'Desktop' }
@@ -372,9 +375,15 @@ function Stop-PotatoScript {
 
             if (-not $PSBoundParameters.ContainsKey('EventId')) {
                 $EventId = switch ($Level) {
-                    'ERROR' { 2001 }
-                    'WARN'  { 1002 }
-                    default { 1001 }
+                    'ERROR' {
+                        if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId + 1000 } else { 2001 }
+                    }
+                    'WARN'  {
+                        if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId + 1000 } else { 1002 }
+                    }
+                    default {
+                        if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId } else { 1001 }
+                    }
                 }
             }
 
