@@ -126,6 +126,8 @@ trap {
     break
 }
 
+Invoke-PotatoFailedTaskLockCleanup -LogFile $LogFile
+
 Start-PotatoScript -ScriptName 'watchdog.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl -StartEventId 1020
 
 try {

@@ -254,6 +254,60 @@ function Get-PotatoLockPath {
     return Join-Path $Global:LockDir "$safeName.lock"
 }
 
+function Invoke-PotatoFailedTaskLockCleanup {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LogFile,
+        [string[]]$ExcludeScriptNames = @(),
+        [int]$MaxLockAgeMinutes = 15
+    )
+
+    if (-not (Test-Path -LiteralPath $Global:LockDir)) {
+        return
+    }
+
+    $lockFiles = Get-ChildItem -LiteralPath $Global:LockDir -Filter '*.lock' -File -ErrorAction SilentlyContinue
+    if (-not $lockFiles) {
+        return
+    }
+
+    $exclude = @{}
+    foreach ($name in $ExcludeScriptNames) {
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            $exclude[$name.Trim().ToLowerInvariant()] = $true
+        }
+    }
+
+    $cutoffTime = (Get-Date).AddMinutes(-[Math]::Abs($MaxLockAgeMinutes))
+
+    foreach ($lockFile in $lockFiles) {
+        $lockContent = ''
+        try {
+            $lockContent = Get-Content -LiteralPath $lockFile.FullName -Raw -ErrorAction Stop
+        }
+        catch {
+        }
+
+        $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($lockFile.Name)
+        $scriptMatch = [regex]::Match($lockContent, 'Script=([^;]+)')
+        if ($scriptMatch.Success -and -not [string]::IsNullOrWhiteSpace($scriptMatch.Groups[1].Value)) {
+            $scriptName = $scriptMatch.Groups[1].Value.Trim()
+        }
+
+        if ($exclude.ContainsKey($scriptName.ToLowerInvariant())) {
+            continue
+        }
+
+        if ($lockFile.LastWriteTime -gt $cutoffTime) {
+            Write-PotatoLog -Message "Lock retained for $scriptName at $($lockFile.FullName) because it is newer than $MaxLockAgeMinutes minute(s)." -Level 'INFO' -LogFile $LogFile -EventId 3013
+            continue
+        }
+
+        Remove-Item -LiteralPath $lockFile.FullName -Force -ErrorAction SilentlyContinue
+        Write-PotatoLog -Message "Removed stale lock for $scriptName at $($lockFile.FullName) because lock age exceeded $MaxLockAgeMinutes minute(s)." -Level 'WARN' -LogFile $LogFile -EventId 3014
+    }
+}
+
 function Enter-PotatoScriptLock {
     param(
         [Parameter(Mandatory = $true)]
