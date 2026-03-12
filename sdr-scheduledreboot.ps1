@@ -18,7 +18,7 @@ trap {
     break
 }
 
-Start-PotatoScript -ScriptName 'sdr-scheduledreboot.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl
+Start-PotatoScript -ScriptName 'sdr-scheduledreboot.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl -StartEventId 1050
 
 try {
     $msg = @(

@@ -14,7 +14,7 @@ trap {
     break
 }
 
-Start-PotatoScript -ScriptName 'startup.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl
+Start-PotatoScript -ScriptName 'startup.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl -StartEventId 1010
 
 try {
 

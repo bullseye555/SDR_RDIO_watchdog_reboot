@@ -126,7 +126,7 @@ trap {
     break
 }
 
-Start-PotatoScript -ScriptName 'watchdog.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl
+Start-PotatoScript -ScriptName 'watchdog.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl -StartEventId 1020
 
 try {
     $nowLocal = Convert-ToMelbourneString -DateTimeValue $now

@@ -27,7 +27,7 @@ trap {
 # =========================
 # Main
 # =========================
-Start-PotatoScript -ScriptName 'sdr-cleanlogs.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl
+Start-PotatoScript -ScriptName 'sdr-cleanlogs.ps1' -LogFile $LogFile -WebhookUrl $WebhookUrl -StartEventId 1030
 $cutoff = (Get-Date).AddDays(-$DaysOld)
 
 try {
