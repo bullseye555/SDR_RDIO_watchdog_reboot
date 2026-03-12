@@ -376,10 +376,10 @@ function Stop-PotatoScript {
             if (-not $PSBoundParameters.ContainsKey('EventId')) {
                 $EventId = switch ($Level) {
                     'ERROR' {
-                        if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId + 1000 } else { 2001 }
+                        if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId + 1007 } else { 2001 }
                     }
                     'WARN'  {
-                        if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId + 1000 } else { 1002 }
+                        if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId + 1008 } else { 1002 }
                     }
                     default {
                         if ($null -ne $script:__PotatoEndEventId) { $script:__PotatoEndEventId } else { 1001 }
