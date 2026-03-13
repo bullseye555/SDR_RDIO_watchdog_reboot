@@ -13,7 +13,7 @@ $db = "C:\Users\nabro\Desktop\rdio\rdio-scanner.db"
 $sdrLaunchTarget = "C:\Users\nabro\Desktop\sdr-trunk.bat - Shortcut.lnk"
 $rdioLaunchTarget = "C:\Users\nabro\Desktop\rdio.bat"
 $recordingStaleMinutes = 30
-$restartThrottleHours = 1
+$restartThrottleMinutes = 90
 
 function Get-MelbourneTimeZone {
     return [System.TimeZoneInfo]::FindSystemTimeZoneById('AUS Eastern Standard Time')
@@ -121,6 +121,47 @@ function Restart-SdrTrunk {
     Send-DiscordEmbed -Url $WebhookUrl -Title $DiscordTitle -Description $desc -Color $Color
 }
 
+function Get-LastRestartTime {
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$SdrState
+    )
+
+    if (-not $SdrState.last_restart) {
+        return $null
+    }
+
+    try {
+        return [datetime]$SdrState.last_restart
+    }
+    catch {
+        Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "Could not parse last_restart value '$($SdrState.last_restart)' from SDR state file." -EventId 2207
+        return $null
+    }
+}
+
+function Test-RestartThrottle {
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$SdrState,
+        [Parameter(Mandatory = $true)]
+        [string]$Reason
+    )
+
+    $lastRestart = Get-LastRestartTime -SdrState $SdrState
+
+    if ($null -eq $lastRestart) {
+        return $true
+    }
+
+    if ($lastRestart -gt $now.AddMinutes(-$restartThrottleMinutes)) {
+        Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "SDRTrunk restart skipped for '$Reason' due to one-per-$restartThrottleMinutes-minute throttle. Last restart: $lastRestart" -EventId 2204
+        return $false
+    }
+
+    return $true
+}
+
 trap {
     Invoke-PotatoUnhandledError -ErrorRecord $_
     break
@@ -176,17 +217,7 @@ try {
             $lastRecordingLocal = Convert-ToMelbourneString -DateTimeValue $lastRecording
 
             if ($lastRecording -lt $now.AddMinutes(-$recordingStaleMinutes)) {
-                $restartAllowed = $true
-
-                if ($sdr.last_restart) {
-                    $lastRestart = [datetime]$sdr.last_restart
-                    if ($lastRestart -gt $now.AddHours(-$restartThrottleHours)) {
-                        $restartAllowed = $false
-                        Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "SDRTrunk appears hung but restart was skipped due to one-per-$restartThrottleHours-hour throttle. Last restart: $lastRestart" -EventId 2204
-                    }
-                }
-
-                if ($restartAllowed) {
+                if (Test-RestartThrottle -SdrState $sdr -Reason 'No recent recordings') {
                     Restart-SdrTrunk -SdrState $sdr -Counters $counters -Reason 'No recent recordings' -DiscordTitle 'SDRTrunk Restarted (No Recordings)' -DescriptionLines @(
                         "Check time: $nowLocal"
                         "Last recording: $lastRecordingLocal"
@@ -197,6 +228,14 @@ try {
         }
         else {
             Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "No recordings found in $recordings" -EventId 2205
+
+            if (Test-RestartThrottle -SdrState $sdr -Reason 'No recordings found') {
+                Restart-SdrTrunk -SdrState $sdr -Counters $counters -Reason 'No recordings found' -DiscordTitle 'SDRTrunk Restarted (No Recordings Found)' -DescriptionLines @(
+                    "Check time: $nowLocal"
+                    'No recordings were found in the recordings directory'
+                    "Restart performed: $nowLocal"
+                ) -Color 15105570 -StopExisting
+            }
         }
     }
 
