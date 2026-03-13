@@ -228,13 +228,6 @@ try {
         }
         else {
             Write-PotatoLog -LogFile $LogFile -Level 'WARN' -Message "No recordings found in $recordings" -EventId 2205
-
-            if (Test-RestartThrottle -SdrState $sdr -Reason 'No recordings found') {
-                Restart-SdrTrunk -SdrState $sdr -Counters $counters -Reason 'No recordings found' -DiscordTitle 'SDRTrunk Restarted (No Recordings Found)' -DescriptionLines @(
-                    "Check time: $nowLocal"
-                    'No recordings were found in the recordings directory'
-                    "Restart performed: $nowLocal"
-                ) -Color 15105570 -StopExisting
             }
         }
     }
